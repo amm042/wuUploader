@@ -116,7 +116,7 @@ def get_day(day,
     end = begin + span
     
     
-    if end > datetime.datetime.now():
+    if end >= datetime.datetime.now().date():
         log.warn("End time is in the future, skipping!")
         return
     
@@ -227,9 +227,15 @@ if __name__ == "__main__":
     while at < end:
         for resolution in resolutions:
             for group, span in groups:
-                logging.info("Downloading data from: {} to {} with resolution = {}".format(at.isoformat(),
-                                                                                           (at + span).isoformat(),  
-                                                                                           resolution))
+                
+                # only do one monthly a month!
+                if group == 'monthly' and at.day > 1:
+                    continue
+                
+                logging.info("Downloading {} data from: {} to {} with resolution = {}".format(group,
+                                                                                              at.isoformat(),
+                                                                                              (at + span).isoformat(),  
+                                                                                              resolution))
                 get_day(at, 
                         span = span,
                         group = group,
