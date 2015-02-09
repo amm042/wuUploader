@@ -1,6 +1,6 @@
 import logging
 LOGFMT = '%(asctime)s %(name)-30s %(levelname)-8s %(message).320s'
-logging.basicConfig(level = logging.DEBUG,
+logging.basicConfig(level = logging.WARN,
                     format = LOGFMT)
 log = logging.getLogger()
 import datetime
@@ -10,6 +10,8 @@ import pytz
 import urlparse
 import os
 import os.path
+import socket
+import sys
 
 server_url = 'http://amm-csr2:4242/api'
   
@@ -196,12 +198,18 @@ if __name__ == "__main__":
     
     resolutions = [None, '5m-avg', '15m-avg', '60m-avg']
     
+    if len(sys.argv) == 2 and os.path.exists(sys.argv[1]):
+        outdir = sys.argv[1]
+    else:
+        outdir = './archive'
+
     at = begin
     while at < end:
         for resolution in resolutions:
             logging.info("Downloading data from: {} with resolution = {}".format(at.isoformat(), resolution))
-                            
-            get_day(at, downsample= resolution)
+        
+	                    
+            get_day(at, outdir = outdir, downsample = resolution)
             
         at += step
         
