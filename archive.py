@@ -1,144 +1,207 @@
 import logging
-
 LOGFMT = '%(asctime)s %(name)-30s %(levelname)-8s %(message).320s'
 logging.basicConfig(level = logging.DEBUG,
                     format = LOGFMT)
-import sys
-from datetime import datetime, timedelta
-
-#sys.path.append('/home/alan/workspace/')
-#sys.path.append('/h')
-sys.path.append('..')
-
-#import SensorSystem.SensorAPI as SensorAPI
-import SensorSystem.SensorAPI.API as API
+log = logging.getLogger()
+import datetime
+import requests
 import json
-import collections
-#$import SensorSystem.SensorAPI.Tags as Tags
+import pytz
+import urlparse
+import os
+import os.path
+
+server_url = 'http://amm-csr2:4242/api'
+  
+
+def convert_time(ts):
+    if isinstance(ts, datetime.date):
+        ts = datetime.datetime(ts.year, ts.month, ts.day)
+    return int((ts - datetime.datetime(1970,1,1) +
+                datetime.timedelta(hours=4)).total_seconds())
+
+def unconvert_time(uxtime):
+    return datetime.datetime(1970,1,1,tzinfo=pytz.timezone('US/Eastern')) + \
+            datetime.timedelta(seconds=uxtime) - \
+            datetime.timedelta(hours=4)
 
 
-epoch = datetime(1970, 1, 1)
-def timestamp(dt):
-    return "{:.0f}".format((dt - epoch).total_seconds())
-def fromtimestamp(ts):
-    return epoch + timedelta(seconds = int(ts) / 1000.0)
-
-
-def getDataTable(begin, end):
-    #client = SensorAPI.SensorAPI()
-    client = API.SensorClient() 
+def get_tags_from_metric(m):
+    r = requests.get("{}/search/lookup?m={}".format(server_url, m))
     
-    # lookup all metrics
-    lookup = json.loads(client.lookup({'m':'*'}))
-    
-    # metrics is the form metrics['metric name'] = list of sensor_names
-    metrics = {}
-    for metric in lookup['results']:
-        logging.info("Metric: {}, tags: {}".format(metric['metric'], 
-                                                   metric['tags']))
-        
-        if metric['metric'] not in metrics:
-            metrics[metric['metric']] = []
-            
-        name = metric['tags']['sensor_name']
-        
-        if name not in metrics[metric['metric']]:
-            metrics[metric['metric']].append(name) 
-            
-    for metric, names in metrics.iteritems():
-        logging.info ("{}.{}".format(metric, names))
-    
-    
-    agg_avg = API.QueryAggregator.Average
-    ds_15m = API.DownSample("15m", agg_avg)
-    
-    metric = "Table"
-    
-    data = {}
-    units = {}
-    for name in metrics[metric]:
-        tags = API.Tags(metric)
-        tags.addTag("sensor_name", name)
-        qr = json.loads(                            
-            client.singleQuery(#timestamp(datetime.now()-timedelta(days=1)),
-                                # timestamp(datetime.now()+timedelta(minutes=15)),
-                                begin,
-                                end,
-                                 tags = tags,
-                                 aggregator = agg_avg,
-                                 downSample =ds_15m)     
-                        )
-                                 
-        if 'error' in qr:
-            logging.error("ERROR {} - {}".format(qr['error']['code'], qr['error']['message']))
-            logging.error("DETAIL: {}".format(qr['error']['details']))
-        
+    if r.status_code == requests.codes.ok:    
+        rsp = json.loads(r.text)
+        log.debug(rsp)
+        if len(rsp['results']) == 0: # metric has no tags
+            return []
         else:
-            qr = qr[0] # for some reason the result is packed in a list.. maybe fore multiple queries...
-            
-            logging.debug("qr={}".format(qr))
-            logging.info("got {} points for last hour".format( len(qr['dps'])))
-            
-            
-            if 'sensor_units' in qr['tags']:
-                units[name] = qr['tags']['sensor_units']
-            else:
-                units[name] = ""
-            
-            #s = sorted(qr['dps'].items())
-            #for ts, value in qr['dps'].iteritems():
-            for ts, value in qr['dps'].iteritems():   
-                #logging.info("Got: {}: {} {}".format(
-                #                                     fromtimestamp(ts),
-                #                                     value,
-                #                                     qr['tags']['sensor_units']
-                #                                     ))
-                if ts not in data:
-                    data[ts] = {}
-                data[ts][name] = value
+            tags = []
+            for result in rsp['results']:
+                tags += result['']                    
+    else:
+        log.error("Error processing request")
+        log.error(r.text)
     
-    output = []
-    
-    cols = metrics[metric]
-    fmt = {}
-    # first output a header
-    row = []
-    row.append("{:>19s}".format("timestamp"))
-    fmt['ts'] = '{:19s}'
-    
-    max_col_len = 0
-    for col in cols:
-        s = "{} ({})".format(col, units[col])
-        if len(s) > max_col_len:
-            max_col_len = len(s)
         
-    for col in cols:        
-        row.append("{0:>{1}s}".format("{} ({})".format(col, units[col]), max_col_len))
-        fmt[col] = "{{:>{0}.8f}}".format(max_col_len)
-        
-    output.append(", ".join(row))
+# this gets all the metrics:
+#r = requests.get("{}/suggest?type=metrics&q=&max=999999".format(server_url))
+
+
+def get_day(day, 
+            span = datetime.timedelta(days=1), 
+            outdir = './archive',
+            downsample = None):
     
-    for ts, data in sorted(data.iteritems()):
-        # this will be a single output row
+    # construct output filename, to see if we already have the file
+    if not os.path.exists(outdir):
+        os.mkdir(outdir)
+    
+    if downsample:
+        resolution = downsample
+    else:
+        resolution = "raw"
+    
+    full_path = os.path.join(outdir,                                 
+                             str(day.year),
+                             resolution)
+    if not os.path.exists(full_path):
+        os.makedirs(full_path)    
+    outputfilename = os.path.join(full_path, '{}-data-{}.csv'.format(day.isoformat(), resolution))
+    
+    if os.path.exists(outputfilename):
+        logging.info("Skipping, file already exists: {}".format(outputfilename))
+        return
+    
+    queries = [{
+                'metric': 'Table',
+                'aggregator': 'avg',
+                'downsample': downsample,
+                'tags': {'sensor_name': x} 
+                } for x in ['AirTemp', 'RelHum', 'WaterLevel', 'WindDir', 'WindSpeed', 'Solar_kW', 'BattV', 'WaterTemp', 'PTemp_C', 'Rain_Tot', 'Solar_MJ_Tot']]
+    queries += [{
+                'metric': 'CR800_1',
+                'aggregator': 'avg',
+                'downsample': downsample,
+                'tags': {'sensor_name': x}  
+                } for x in ['WaterLevel', 'WaterTemp', 'PTemp_C', 'BattV']]
+    
+    queries += [{
+                'metric': 'CR800_2',
+                'aggregator': 'avg',
+                'downsample': downsample,
+                'tags': {'sensor_name': x}  
+                } for x in ['WaterLevel', 'WaterTemp', 'PTemp_C', 'BattV']]
+    
+    queries += [{
+                'metric': 'lwbp1',
+                'aggregator': 'avg',
+                'downsample': downsample,
+                }]          
+    begin = day
+    end = begin + span
+    
+    query = {"start": convert_time(begin),
+             "end": convert_time(end),
+             "queries": queries}
+    url = "{}/{}".format(server_url, "query")
+    
+    log.info("requesting: {}, data: {}".format(url, 
+                                               json.dumps(query)))
+    r = requests.post(url, 
+                      data=json.dumps(query),
+                      timeout = 60*60) # set timeout to 1 hr
+    
+    rename = {"Table": "WeatherStation"}
+    
+    if r.status_code == requests.codes.ok:
         
-        row = []
-        row.append(fmt['ts'].format(fromtimestamp(ts).isoformat()))    
-        for name in metrics[metric]:
-            if name in data:            
-                row.append(fmt[name].format(data[name]))
-            else:
-                output.append(", NaN")
+        text = r.text
+        rslt = json.loads(text)    
+        
+        rows = {} ## key is the timestamp
+        #cols= ['Timestamp']
+        cols = []
+            
+        for res in rslt:
+                     
+            if 'sensor_name' in res['tags']:
+                m = res['metric']
+                if m in rename:
+                    m = rename[m]
+                    
+                name = "{}.{} ({})".format(m, res['tags']['sensor_name'], res['tags']['sensor_units'])
+            elif res['metric'] == 'lwbp1':
+                name = "{} ({})".format(res['metric'], res['tags']['units'])
                 
-        output.append(", ".join(row))
-    
-        #logging.info("".join(row))
+            cols.append(name)
+            
+        log.info(cols)
         
-    return "\n".join(output)
+        for res in rslt:
+                   
+            if 'sensor_name' in res['tags']:
+                m = res['metric']
+                if m in rename:
+                    m = rename[m]
+                    
+                name = "{}.{} ({})".format(m, res['tags']['sensor_name'], res['tags']['sensor_units'])
+            elif res['metric'] == 'lwbp1':
+                name = "{} ({})".format(res['metric'], res['tags']['units'])
+                
+            if "dps" in res:
+                k = list(res["dps"].keys())
+                k.sort()
+                for i in k:
+                    
+                    ts = unconvert_time(int(i))
+                    if ts not in rows:
+                        rows[ts] = {}
+                    rows[ts][name] = res["dps"][i]
+                    
+        times = rows.keys()
+        times.sort()                    
+        
+        with open(outputfilename, 'wb') as f:
+            
+            line = ", ".join(['Timestamp'] + cols)
+            f.write(line)
+            f.write("\n")
+            #print(line)
+            logging.debug(line)
+            for t in times:
+                row_array = [t.isoformat()] 
+                for colname in cols:
+                    if colname in rows[t]:
+                        row_array += ["{}".format(rows[t][colname])]
+                    else:
+                        row_array += [""]
+                line = ", ".join(row_array)
+                f.write(line)
+                f.write("\n")
+                #print(line)
+                logging.debug(line)
+            
+        
+    else:
+        
+        log.error("error in request")
+        log.error(r.text)
+        
+if __name__ == "__main__":
+    # full download
+    begin = datetime.date(2014, 8, 1)
 
-
-b = timestamp(datetime.now()-timedelta(days=1))
-e = timestamp(datetime.now()+timedelta(minutes=15))
-
-f =open ("data.csv", 'w')
-f.write(getDataTable(b, e))
-f.close()
+    step = datetime.timedelta(days=1)
+    end = datetime.date.today()
+    
+    resolutions = [None, '5m-avg', '15m-avg', '60m-avg']
+    
+    at = begin
+    while at < end:
+        for resolution in resolutions:
+            logging.info("Downloading data from: {} with resolution = {}".format(at.isoformat(), resolution))
+                            
+            get_day(at, downsample= resolution)
+            
+        at += step
+        
