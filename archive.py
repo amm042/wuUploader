@@ -1,9 +1,10 @@
 import logging
 LOGFMT = '%(asctime)s %(name)-30s %(levelname)-8s %(message).320s'
-logging.basicConfig(level = logging.WARN,
+logging.basicConfig(level = logging.INFO,
                     format = LOGFMT)
 log = logging.getLogger()
 import datetime
+from dateutil.relativedelta import *
 import requests
 import json
 import pytz
@@ -50,9 +51,11 @@ def get_tags_from_metric(m):
 
 
 def get_day(day, 
-            span = datetime.timedelta(days=1), 
+            span = datetime.timedelta(days=1),
+            group = None, 
             outdir = './archive',
             downsample = None):
+    assert group in [None, 'daily', 'monthly']
     
     # construct output filename, to see if we already have the file
     if not os.path.exists(outdir):
@@ -63,12 +66,22 @@ def get_day(day,
     else:
         resolution = "raw"
     
-    full_path = os.path.join(outdir,                                 
-                             str(day.year),
-                             resolution)
+    if group:
+        full_path = os.path.join(outdir,
+                                 group,                                 
+                                 str(day.year),                                
+                                 resolution)
+    else:
+        full_path = os.path.join(outdir,                                 
+                                 str(day.year),
+                                 resolution)
     if not os.path.exists(full_path):
-        os.makedirs(full_path)    
-    outputfilename = os.path.join(full_path, '{}-data-{}.csv'.format(day.isoformat(), resolution))
+        os.makedirs(full_path)
+    
+    if group == None or group == group == 'daily':
+        outputfilename = os.path.join(full_path, '{}-data-{}.csv'.format(day.isoformat(), resolution))
+    elif group == 'monthly':
+        outputfilename = os.path.join(full_path, '{}-data-{}.csv'.format(day.strftime("%Y-%B"), resolution))
     
     if os.path.exists(outputfilename):
         logging.info("Skipping, file already exists: {}".format(outputfilename))
@@ -101,6 +114,11 @@ def get_day(day,
                 }]          
     begin = day
     end = begin + span
+    
+    
+    if end > datetime.datetime.now():
+        log.warn("End time is in the future, skipping!")
+        return
     
     query = {"start": convert_time(begin),
              "end": convert_time(end),
@@ -137,7 +155,7 @@ def get_day(day,
                 
             cols.append(name)
             
-        log.info(cols)
+        #log.info(cols)
         
         for res in rslt:
                    
@@ -197,6 +215,8 @@ if __name__ == "__main__":
     end = datetime.date.today()
     
     resolutions = [None, '5m-avg', '15m-avg', '60m-avg']
+    groups = [('daily', relativedelta(days=1)), 
+              ('monthly', relativedelta(months=1))]
     
     if len(sys.argv) == 2 and os.path.exists(sys.argv[1]):
         outdir = sys.argv[1]
@@ -206,10 +226,15 @@ if __name__ == "__main__":
     at = begin
     while at < end:
         for resolution in resolutions:
-            logging.info("Downloading data from: {} with resolution = {}".format(at.isoformat(), resolution))
-        
-	                    
-            get_day(at, outdir = outdir, downsample = resolution)
+            for group, span in groups:
+                logging.info("Downloading data from: {} to {} with resolution = {}".format(at.isoformat(),
+                                                                                           (at + span).isoformat(),  
+                                                                                           resolution))
+                get_day(at, 
+                        span = span,
+                        group = group,
+                        outdir = outdir, 
+                        downsample = resolution)
             
         at += step
         
