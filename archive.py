@@ -218,10 +218,17 @@ if __name__ == "__main__":
     groups = [('daily', relativedelta(days=1)), 
               ('monthly', relativedelta(months=1))]
     
+    
+    outdir = './archive'
     if len(sys.argv) == 2 and os.path.exists(sys.argv[1]):
         outdir = sys.argv[1]
     else:
-        outdir = './archive'
+        if len (sys.argv) == 1:
+            logging.error("Specify output path on the command line")
+        else:
+            logging.error("Path does not exist: {}".format(sys.argv[1]))
+        exit()
+    
 
     at = begin
     while at < end:
