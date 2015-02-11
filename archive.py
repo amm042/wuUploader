@@ -117,7 +117,7 @@ def get_day(day,
     
     
     if end >= datetime.datetime.now().date():
-        log.warn("End time is in the future, skipping!")
+        log.info("End time is in the future, skipping!")
         return
     
     query = {"start": convert_time(begin),
