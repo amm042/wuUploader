@@ -1,6 +1,6 @@
 import logging
 LOGFMT = '%(asctime)s %(name)-30s %(levelname)-8s %(message).320s'
-logging.basicConfig(level = logging.INFO,
+logging.basicConfig(level = logging.WARN,
                     format = LOGFMT)
 log = logging.getLogger()
 import datetime
@@ -111,12 +111,21 @@ def get_day(day,
                 'metric': 'lwbp1',
                 'aggregator': 'avg',
                 'downsample': downsample,
+		'tags': {'units': 'ft'},
                 }]          
+
+    queries += [{
+                'metric': 'lwbp1',
+                'aggregator': 'avg',
+                'downsample': downsample,
+		'tags': {'units': 'kcfs'},
+                }]          
+
     begin = day
     end = begin + span
     
     
-    if end >= datetime.datetime.now().date():
+    if end > datetime.datetime.now().date():
         log.info("End time is in the future, skipping!")
         return
     
